@@ -1,18 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
-import sgl
 import slangpy as spy
 import pathlib
 
-# Create an SGL device with the slangpy+local include paths
-device = sgl.Device(compiler_options={
-    "include_paths": [
-        spy.SHADER_PATH,
-        pathlib.Path(__file__).parent.absolute(),
-    ],
-})
+# Create an SGL device with the local folder for slangpy includes
+device = spy.create_device(include_paths=[
+    pathlib.Path(__file__).parent.absolute(),
+])
 
-# Create a simple function
+# Load module
 module = spy.Module.load_from_file(device, "example.slang")
 
 # Call the function and print the result

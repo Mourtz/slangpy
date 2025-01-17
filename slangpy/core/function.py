@@ -3,7 +3,7 @@ from copy import copy
 from typing import TYPE_CHECKING, Any, Callable, Optional, Protocol, Union
 
 from slangpy.core.native import (CallMode, NativeCallRuntimeOptions,
-                                 hash_signature)
+                                 hash_signature, TDispatchHook, TCallDataHook)
 
 import slangpy.reflection as kfr
 from slangpy.backend import (CommandBuffer, FunctionReflection,
@@ -17,7 +17,8 @@ if TYPE_CHECKING:
 
 ENABLE_CALLDATA_CACHE = True
 
-TDispatchHook = Callable[[dict[str, Any]], None]
+
+TCallHook = Callable[['Function'], None]
 
 
 def _cache_value_to_id(val: Any) -> str:
@@ -48,6 +49,7 @@ class Function:
         self.slangpy_signature: Optional[str] = None
         self.type_reflection: Optional['TypeReflection']
         self.reflections: list['FunctionReflection']
+        self._name: str
 
         # Static options that affect compilation, and thus the signature
         self._map_args: Optional[tuple[Any]] = None
@@ -65,6 +67,10 @@ class Function:
             'CallData'], Any], dict[str, Any]]]] = None
         self.before_dispatch: Optional[list[TDispatchHook]] = None
         self.after_dispatch: Optional[list[TDispatchHook]] = None
+        self.before_write_call_data: Optional[list[TCallDataHook]] = None
+        self.after_read_call_data: Optional[list[TCallDataHook]] = None
+        self.before_call: Optional[list[TCallHook]] = None
+        self.after_call: Optional[list[TCallHook]] = None
 
     def _copy(self) -> 'Function':
         res = copy(self)
@@ -89,8 +95,11 @@ class Function:
 
         if isinstance(func, kfr.SlangFunction):
             func_reflections = [func.reflection]
+            # Track fully specialized name where available
+            self._name = func.full_name
         else:
             func_reflections = func
+            self._name = func[0].name
 
         # Store function reflections (should normally be 1 unless forced to do AST based search)
         self.reflections = func_reflections
@@ -209,28 +218,28 @@ class Function:
             res._type_conformances.extend(type_conformances)
         return res
 
-    def hook(self, before_dispatch: Optional[TDispatchHook] = None, after_dispatch: Optional[TDispatchHook] = None):
+    def _internal_hook(self, before_dispatch: Optional[TDispatchHook] = None, after_dispatch: Optional[TDispatchHook] = None,
+                       before_write_call_data: Optional['TCallDataHook'] = None, after_read_call_data: Optional['TCallDataHook'] = None,
+                       before_call: Optional[TCallHook] = None, after_call: Optional[TCallHook] = None):
         """
+        EXPERIMENTAL - May be removed.
         Attach hooks to the function that kick in whenever the function is called at different points
         in the dispatch process.
         """
+        safe_append = lambda list, elem: \
+            list if elem is None else [elem] if list is None else list + [elem]
+
         res = self._copy()
-        if before_dispatch is not None:
-            if res.before_dispatch is None:
-                res.before_dispatch = [before_dispatch]
-            else:
-                res.before_dispatch = copy(res.before_dispatch)
-                res.before_dispatch.append(before_dispatch)
-        if after_dispatch is not None:
-            if res.after_dispatch is None:
-                res.after_dispatch = [after_dispatch]
-            else:
-                res.after_dispatch = copy(res.after_dispatch)
-                res.after_dispatch.append(after_dispatch)
+        res.before_dispatch = safe_append(res.before_dispatch, before_dispatch)
+        res.after_dispatch = safe_append(res.after_dispatch, after_dispatch)
+        res.before_write_call_data = safe_append(res.before_write_call_data, before_write_call_data)
+        res.after_read_call_data = safe_append(res.after_read_call_data, after_read_call_data)
+        res.before_call = safe_append(res.before_call, before_call)
+        res.after_call = safe_append(res.after_call, after_call)
         return res
 
     @property
-    def bwds_diff(self):
+    def bwds(self):
         """
         Return a new function object that represents the backwards deriviative of the current function.
         """
@@ -247,6 +256,9 @@ class Function:
             if return_type == 'numpy':
                 import numpy as np
                 return_type = np.ndarray
+            elif return_type == 'tensor':
+                from slangpy.types import Tensor
+                return_type = Tensor
             else:
                 raise ValueError(f"Unknown return type '{return_type}'")
         res._return_type = return_type
@@ -266,11 +278,7 @@ class Function:
         """
         Get the name of the function.
         """
-        r = self.reflections[0]
-        if r.is_overloaded:
-            return r.overloads[0].name
-        else:
-            return r.name
+        return self._name
 
     def as_func(self) -> 'Function':
         """
@@ -305,9 +313,18 @@ class Function:
             calldata = self._build_call_data(*args, **kwargs)
             opts = NativeCallRuntimeOptions()
             opts.after_dispatch = self.after_dispatch
+            opts.after_read_call_data = self.after_read_call_data
             opts.before_dispatch = self.before_dispatch
+            opts.before_write_call_data = self.before_write_call_data
             opts.uniforms = self.uniforms  # type: ignore (can't work out this type)
-            return calldata.call(opts, *args, **kwargs)
+            if self.before_call:
+                for f in self.before_call:
+                    f(self)
+            res = calldata.call(opts, *args, **kwargs)
+            if self.after_call:
+                for f in self.after_call:
+                    f(self)
+            return res
         except ValueError as e:
             self._handle_error(e, calldata)
 
@@ -324,7 +341,9 @@ class Function:
             calldata = self._build_call_data(*args, **kwargs)
             opts = NativeCallRuntimeOptions()
             opts.after_dispatch = self.after_dispatch
+            opts.after_read_call_data = self.after_read_call_data
             opts.before_dispatch = self.before_dispatch
+            opts.before_write_call_data = self.before_write_call_data
             opts.uniforms = self.uniforms  # type: ignore (can't work out this type)
             return calldata.append_to(opts, command_buffer, *args, **kwargs)
         except ValueError as e:
@@ -369,7 +388,9 @@ class Function:
 
         opts = NativeCallRuntimeOptions()
         opts.after_dispatch = self.after_dispatch
+        opts.after_read_call_data = self.after_read_call_data
         opts.before_dispatch = self.before_dispatch
+        opts.before_write_call_data = self.before_write_call_data
         opts.uniforms = self.uniforms  # type: ignore (can't work out this type)
         dispatch_data.dispatch(opts, thread_count, vars, command_buffer, **kwargs)
 

@@ -4,18 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "slangpy"
+version = "0.12.0"
 authors = [
     {name = "Chris Cummings", email = "chriscummings@nvidia.com"},
-    {name = "Benedikt Bitterli", email = "bbitterli@nvidia.com"}
+    {name = "Benedikt Bitterli", email = "bbitterli@nvidia.com"},
+    {name = "Sai Bangaru", email = "sbangaru@nvidia.com"},
+    {name = "Yong He", email = "yhe@nvidia.com"}
 ]
 description = "Easily call Slang functions and integrate with PyTorch auto diff directly from Python."
 readme = "README.md"
 requires-python = ">=3.9"
-dynamic = ["version"]
 dependencies = [
   "typing_extensions",
   "numpy",
-  "nv-sgl>=0.4.0"
+  "nv-sgl>=0.6.2"
 ]
 
 [tool.setuptools]

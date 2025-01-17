@@ -8,10 +8,10 @@ from slangpy.backend import ResourceUsage
 from slangpy.bindings import (PYTHON_TYPES, Marshall, BindContext,
                               BoundVariable, BoundVariableRuntime,
                               CodeGenBlock, ReturnContext)
-from slangpy.builtin.value import slang_type_to_return_type
-from slangpy.reflection import (TYPE_OVERRIDES, SlangProgramLayout, SlangType,
+from slangpy.reflection import (TYPE_OVERRIDES, SlangProgramLayout, SlangType, VectorType,
                                 is_matching_array_type)
-from slangpy.types import NDBuffer, NDDifferentiableBuffer
+from slangpy.types import NDBuffer
+from slangpy.experimental.diffbuffer import NDDifferentiableBuffer
 
 
 class StopDebuggerException(Exception):
@@ -98,11 +98,9 @@ class BaseNDBufferMarshall(Marshall):
             if is_matching_array_type(bound_type, self.slang_element_type):
                 return self.slang_element_type
 
-        # if implicit tensor casts enabled, allow conversion from vector/matrix to element type
+        # if implicit tensor casts enabled, allow conversion from vector to element type
         if context.options['implicit_tensor_casts']:
-            if bound_type.full_name.startswith('vector<') and self.slang_element_type == bound_type.element_type:
-                return bound_type
-            elif bound_type.full_name.startswith('matrix<') and self.slang_element_type == bound_type.element_type:
+            if isinstance(bound_type, VectorType) and self.slang_element_type == bound_type.element_type:
                 return bound_type
 
         # Default to just casting to itself (i.e. no implicit cast)
@@ -156,14 +154,14 @@ class NDBufferMarshall(BaseNDBufferMarshall):
 
         if isinstance(binding.vector_type, NDBufferType):
             return {
-                'buffer': data.buffer,
+                'buffer': data.storage,
                 'strides': data.strides,
                 'shape': data.shape.as_tuple()
             }
         else:
             broadcast = _calc_broadcast(context, binding)
             return {
-                'buffer': data.buffer,
+                'buffer': data.storage,
                 'strides': [data.strides[i] if not broadcast[i] else 0 for i in range(len(data.strides))],
                 'shape': data.shape.as_tuple()
             }
@@ -173,8 +171,7 @@ class NDBufferMarshall(BaseNDBufferMarshall):
         return data.uniforms()
 
     def create_output(self, context: CallContext, binding: BoundVariableRuntime) -> Any:
-        et = slang_type_to_return_type(self.slang_element_type)
-        return NDBuffer(context.device, et, shape=context.call_shape, usage=ResourceUsage.shader_resource | ResourceUsage.unordered_access)
+        return NDBuffer(context.device, self.slang_element_type, shape=context.call_shape, usage=ResourceUsage.shader_resource | ResourceUsage.unordered_access)
 
     def read_output(self, context: CallContext, binding: BoundVariableRuntime, data: NDDifferentiableBuffer) -> Any:
         return data
@@ -182,7 +179,7 @@ class NDBufferMarshall(BaseNDBufferMarshall):
 
 def create_vr_type_for_value(layout: SlangProgramLayout, value: Any):
     if isinstance(value, NDBuffer):
-        return NDBufferMarshall(layout, value.element_type,
+        return NDBufferMarshall(layout, value.dtype,
                                 len(value.shape),
                                 (value.usage & ResourceUsage.unordered_access) != 0)
     elif isinstance(value, ReturnContext):
@@ -284,7 +281,7 @@ class NDDifferentiableBufferMarshall(BaseNDBufferMarshall):
     def create_calldata(self, context: CallContext, binding: 'BoundVariableRuntime', data: NDDifferentiableBuffer) -> Any:
         if isinstance(binding.vector_type, NDBufferType):
             return {
-                'buffer': data.buffer,
+                'buffer': data.storage,
                 'strides': data.strides,
                 'shape': data.shape.as_tuple()
             }
@@ -299,7 +296,7 @@ class NDDifferentiableBufferMarshall(BaseNDBufferMarshall):
                 if prim_access != AccessType.none:
                     ndbuffer = data if prim == PrimType.primal else data.grad
                     assert ndbuffer is not None
-                    value = ndbuffer.buffer if prim == PrimType.primal else ndbuffer.buffer
+                    value = ndbuffer.storage if prim == PrimType.primal else ndbuffer.storage
                     res[prim_name] = {
                         'buffer': value,
                         'strides': [data.strides[i] if not broadcast[i] else 0 for i in range(len(data.strides))],
@@ -308,8 +305,7 @@ class NDDifferentiableBufferMarshall(BaseNDBufferMarshall):
             return res
 
     def create_output(self, context: CallContext, binding: BoundVariableRuntime) -> Any:
-        et = slang_type_to_return_type(self.slang_element_type)
-        return NDDifferentiableBuffer(context.device, et,
+        return NDDifferentiableBuffer(context.device, self.slang_element_type,
                                       shape=context.call_shape,
                                       requires_grad=True,
                                       usage=ResourceUsage.shader_resource | ResourceUsage.unordered_access)
@@ -323,7 +319,7 @@ class NDDifferentiableBufferMarshall(BaseNDBufferMarshall):
 
 def create_gradvr_type_for_value(layout: SlangProgramLayout, value: Any):
     if isinstance(value, NDDifferentiableBuffer):
-        return NDDifferentiableBufferMarshall(layout, value.element_type,
+        return NDDifferentiableBufferMarshall(layout, value.dtype,
                                               len(value.shape),
                                               (value.usage & ResourceUsage.unordered_access) != 0)
     elif isinstance(value, ReturnContext):

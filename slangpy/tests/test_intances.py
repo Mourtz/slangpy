@@ -9,12 +9,13 @@ from sgl import Buffer, Device
 from slangpy.core.struct import Struct
 
 import slangpy.tests.helpers as helpers
-from slangpy import (InstanceList, InstanceListBuffer,
-                     InstanceListDifferentiableBuffer, Module)
+from slangpy import (InstanceList, InstanceBuffer,
+                     Module)
 from slangpy.backend import DeviceType, float2, float3, math
-from slangpy.types.buffer import NDBuffer, NDDifferentiableBuffer
+from slangpy.types import NDBuffer, Tensor
 from slangpy.types.randfloatarg import RandFloatArg
 from slangpy.types.valueref import ValueRef, floatRef
+from slangpy.experimental.diffinstancelist import InstanceDifferentiableBuffer
 
 
 def load_module(device_type: DeviceType, name: str = "test_modules.slang") -> Module:
@@ -58,7 +59,7 @@ def test_this_interface(device_type: DeviceType):
     Particle_reset(float2(1, 2), float2(3, 4))
 
     # Check the buffer has been correctly populated
-    data = buffer.buffer.to_numpy().view(dtype=np.float32)
+    data = buffer.storage.to_numpy().view(dtype=np.float32)
     assert len(data) == 11
     # position
     assert data[0] == 1.0
@@ -100,7 +101,7 @@ def test_this_interface_soa(device_type: DeviceType):
     Particle_reset(float2(1, 2), float2(3, 4))
 
     # Check the buffer has been correctly populated
-    data = this.data['position'].buffer.to_numpy().view(dtype=np.float32)
+    data = this.data['position'].storage.to_numpy().view(dtype=np.float32)
     assert len(data) == 2
     assert data[0] == 1.0
     assert data[1] == 2.0
@@ -124,7 +125,7 @@ def test_loose_instance_as_buffer(device_type: DeviceType):
     instance.construct(float2(1, 2), float2(3, 4))
 
     # Check the buffer has been correctly populated
-    data = buffer.buffer.to_numpy().view(dtype=np.float32)
+    data = buffer.storage.to_numpy().view(dtype=np.float32)
     assert len(data) == 11
     assert data[0] == 1.0
     assert data[1] == 2.0
@@ -138,7 +139,7 @@ def test_loose_instance_as_buffer(device_type: DeviceType):
     instance.update_position(1.0)
 
     # Check the buffer has been correctly updated
-    data = buffer.buffer.to_numpy().view(dtype=np.float32)
+    data = buffer.storage.to_numpy().view(dtype=np.float32)
     assert len(data) == 11
     assert data[0] == 0.0
     assert data[1] == 1.0
@@ -170,7 +171,7 @@ def test_loose_instance_soa(device_type: DeviceType):
     instance.construct(float2(1, 2), float2(3, 4))
 
     # Check the buffer has been correctly populated
-    data = instance.position.buffer.to_numpy().view(dtype=np.float32)
+    data = instance.position.storage.to_numpy().view(dtype=np.float32)
     assert data[0] == 1.0
     assert data[1] == 2.0
 
@@ -181,7 +182,7 @@ def test_loose_instance_soa(device_type: DeviceType):
     instance.update_position(1.0)
 
     # Check the buffer has been correctly updated
-    data = instance.position.buffer.to_numpy().view(dtype=np.float32)
+    data = instance.position.storage.to_numpy().view(dtype=np.float32)
     assert len(data) == 2
     assert data[0] == 0.0
     assert data[1] == 1.0
@@ -228,13 +229,13 @@ def test_pass_instance_to_function(device_type: DeviceType):
     assert isinstance(Particle, Struct)
 
     # Create storage for particles in a simple buffer
-    particles = InstanceListBuffer(Particle, shape=(1000,))
+    particles = InstanceBuffer(Particle, shape=(1000,))
 
     # Call the slang constructor on all particles in the buffer,
     # assigning each a constant starting position and a random velocity
     particles.construct(position=float2(10, 10),
                         velocity=RandFloatArg(min=-1, max=1, dim=2))
-    expected_particles = particles._data.buffer.to_numpy().view(dtype=np.float32).reshape(-1, 11)
+    expected_particles = particles._data.storage.to_numpy().view(dtype=np.float32).reshape(-1, 11)
 
     # Call the slang function 'Particle::update_position' to update them
     # and do the same for the python version
@@ -242,20 +243,20 @@ def test_pass_instance_to_function(device_type: DeviceType):
     particle_update_positions(expected_particles, 1.0/60.0)
 
     # Check the numpy buffer and the slang buffer are the same
-    particle_data = particles._data.buffer.to_numpy().view(dtype=np.float32).reshape(-1, 11)
+    particle_data = particles._data.storage.to_numpy().view(dtype=np.float32).reshape(-1, 11)
     assert np.allclose(particle_data, expected_particles)
 
     # Define a 'Quad' type which is just an array of float2s, and make a buffer for them
     Quad = m['float2[4]']
     assert isinstance(Quad, Struct)
-    quads = InstanceListBuffer(Quad, particles.shape)
+    quads = InstanceBuffer(Quad, particles.shape)
 
     # Call the slang function 'get_particle_quad' which takes particles and returns quads
     m.get_particle_quad(particles, _result=quads)
     expected_quads = get_particle_quads(expected_particles)
 
     # Read out all the quads as numpy arrays of floats
-    quad_data = quads._data.buffer.to_numpy().view(dtype=np.float32).reshape(-1, 4, 2)
+    quad_data = quads._data.storage.to_numpy().view(dtype=np.float32).reshape(-1, 4, 2)
     assert np.allclose(quad_data, expected_quads)
 
 
@@ -278,7 +279,7 @@ def test_pass_nested_instance_to_function(device_type: DeviceType):
         'position': NDBuffer(m.device, float2, 1000),
         'velocity': float2(0, 0),
         'size': 0.5,
-        'material': InstanceListBuffer(Material, shape=(1000,))
+        'material': InstanceBuffer(Material, shape=(1000,))
     })
 
     # Call the slang constructor on all particles in the buffer,
@@ -286,7 +287,7 @@ def test_pass_nested_instance_to_function(device_type: DeviceType):
     particles.construct(position=float2(10, 10), velocity=float2(0, 0))
 
     # Check colors are white and emission is black!
-    material_data = particles._data['material']._data.buffer.to_numpy().view(
+    material_data = particles._data['material']._data.storage.to_numpy().view(
         dtype=np.float32).reshape(-1, 6)
     for i in range(0, len(material_data)):
         material_data[i][0] = 1
@@ -342,8 +343,8 @@ def test_custom_instance_list(device_type: DeviceType):
 class ExtendedInstanceList(InstanceList):
     def __init__(self, struct: Struct):
         super().__init__(struct)
-        self.position = NDDifferentiableBuffer(struct.device, float2, 1000)
-        self.velocity = NDDifferentiableBuffer(struct.device, float2, 1000)
+        self.position = NDBuffer(struct.device, float2, 1000)
+        self.velocity = NDBuffer(struct.device, float2, 1000)
         self.size = 0.5
         self.material = {
             'color': float3(1, 1, 1),
@@ -375,7 +376,7 @@ def test_extended_instance_list(device_type: DeviceType):
     particles.update()
 
     # Check the buffer has been correctly updated
-    data = particles.position.primal_to_numpy().view(dtype=np.float32).reshape(-1, 2)
+    data = particles.position.to_numpy().view(dtype=np.float32).reshape(-1, 2)
     assert np.allclose(data, [10, 10+1.0/60.0])
 
 
@@ -390,7 +391,7 @@ def test_backwards_diff(device_type: DeviceType):
     assert isinstance(Particle, Struct)
 
     # Create storage for particles in a simple buffer
-    particles = InstanceListDifferentiableBuffer(Particle, shape=(1000,))
+    particles = InstanceDifferentiableBuffer(Particle, shape=(1000,))
 
     # Call the slang constructor on all particles in the buffer,
     # assigning each a constant starting position and a random velocity
@@ -398,23 +399,24 @@ def test_backwards_diff(device_type: DeviceType):
                         velocity=RandFloatArg(min=-1, max=1, dim=2))
 
     # Get next position of particles (automatically returns differentiable buffer of correct size)
-    next_positions = particles.calc_next_position(dt=1.0/60.0)
+    next_positions = particles.calc_next_position(dt=1.0/60.0, _result='tensor')
+    next_positions = next_positions.with_grads()
 
     # Init the gradients of next positions to 1 for the backwards pass
-    next_positions.grad_from_numpy(np.ones((1000, 2), dtype=np.float32))
+    next_positions.grad.storage.from_numpy(np.ones((1000, 2), dtype=np.float32))
 
     # Make a buffer of 1000 identical dts, so we can get back the unique grads for each one
-    dts = NDDifferentiableBuffer(m.device, float, 1000, requires_grad=True)
-    dts.primal_from_numpy(np.full((1000,), 1.0/60.0, dtype=np.float32))
+    dts = Tensor.empty(m.device, shape=(1000,), dtype=float).with_grads()
+    dts.storage.from_numpy(np.full((1000,), 1.0/60.0, dtype=np.float32))
 
     # Backwards pass
-    particles.calc_next_position.bwds_diff(dt=dts, _result=next_positions)
+    particles.calc_next_position.bwds(dt=dts, _result=next_positions)
 
     # Read back all primals and gradients we ended up with into numpy arrays
     particle_primals = particles.primal_to_numpy().view(dtype=np.float32).reshape(-1, 11)
     particle_grads = particles.grad_to_numpy().view(dtype=np.float32).reshape(-1, 11)
-    dt_grads = dts.grad_to_numpy().view(dtype=np.float32)
-    next_positions = next_positions.primal_to_numpy().view(dtype=np.float32).reshape(-1, 2)
+    dt_grads = dts.grad.storage.to_numpy().view(dtype=np.float32)
+    next_positions = next_positions.storage.to_numpy().view(dtype=np.float32).reshape(-1, 2)
 
     for particle_idx in range(0, len(particle_primals)):
         pos = particle_primals[particle_idx][0:2]

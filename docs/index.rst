@@ -18,15 +18,34 @@ By bringing these 2 technologies together with a simple and flexible Python libr
 
 .. toctree::
    :hidden:
-   :maxdepth: 2
+   :maxdepth: 0
+   
+   changelog
+
+.. toctree::
+   :hidden:
+   :maxdepth: 1
    :caption: Basics
    
    installation
    firstfunctions
+   buffers
+   textures
+   nested
+   typemethods
+   broadcasting
+   mapping
 
 .. toctree::
    :hidden:
-   :maxdepth: 2
+   :maxdepth: 1
+   :caption: Auto-Diff
+   
+   autodiff
+
+.. toctree::
+   :hidden:
+   :maxdepth: 1
    :caption: API
    
    api/slangpy

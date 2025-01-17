@@ -28,6 +28,7 @@ class CallMode(Enum):
 
 
 TDispatchHook = Callable[[dict[str, Any]], None]
+TCallDataHook = Callable[['CallContext', tuple['Any'], dict[str, 'Any']], None]
 
 
 class Shape:
@@ -327,6 +328,8 @@ class NativeCallRuntimeOptions:
             'NativeCallData'], dict[str, Any]], dict[str, Any]]]] = None
         self.before_dispatch: Optional[list[TDispatchHook]] = None
         self.after_dispatch: Optional[list[TDispatchHook]] = None
+        self.before_write_call_data: Optional[list[TCallDataHook]] = None
+        self.after_read_call_data: Optional[list[TCallDataHook]] = None
 
 
 class NativeCallData:
@@ -365,7 +368,7 @@ class NativeCallData:
         self.last_call_shape = call_shape
 
         # Setup context
-        context = CallContext(device, call_shape)
+        context = CallContext(device, call_shape, self.call_mode)
 
         # Allocate a return value if not provided in kw args
         # This is redundant if command buffer supplied, as we don't return anything
@@ -375,6 +378,10 @@ class NativeCallData:
                 kwargs["_result"] = rv_node.python_type.create_output(context, rv_node)
                 unpacked_kwargs["_result"] = kwargs["_result"]
                 rv_node.populate_call_shape(call_shape.as_list(), kwargs["_result"])
+
+        if opts.before_write_call_data is not None:
+            for hook in opts.before_write_call_data:
+                hook(context, unpacked_args, unpacked_kwargs)
 
         self.runtime.write_calldata_pre_dispatch(context,
                                                  call_data, *unpacked_args, **unpacked_kwargs)
@@ -418,6 +425,10 @@ class NativeCallData:
         self.runtime.read_call_data_post_dispatch(
             context, call_data, *unpacked_args, **unpacked_kwargs)
 
+        if opts.after_read_call_data is not None:
+            for hook in opts.after_read_call_data:
+                hook(context, unpacked_args, unpacked_kwargs)
+
         # Push updated 'this' values back to original objects
         for (i, arg) in enumerate(args):
             pack_arg(arg, unpacked_args[i])
@@ -435,10 +446,11 @@ class CallContext:
     Native call context
     """
 
-    def __init__(self, device: 'Device', call_shape: Shape):
+    def __init__(self, device: 'Device', call_shape: Shape, call_mode: CallMode):
         super().__init__()
         self.device = device
         self.call_shape = call_shape
+        self.call_mode = call_mode
 
 
 def unpack_arg(arg: Any) -> Any:

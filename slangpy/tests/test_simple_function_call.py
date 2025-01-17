@@ -7,7 +7,7 @@ from sgl import float3
 
 import slangpy.tests.helpers as helpers
 from slangpy.backend import Device, DeviceType
-from slangpy.types import NDBuffer, NDDifferentiableBuffer
+from slangpy.types import NDBuffer, Tensor
 from slangpy.types.diffpair import diffPair, floatDiffPair
 from slangpy.types.valueref import intRef
 
@@ -57,6 +57,26 @@ int add_numbers(int a, int b) {
     # just verify it can be called with no exceptions
     res = function(5, 10)
     assert res == 15
+
+
+@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
+def test_call_specialized_function(device_type: DeviceType):
+
+    device = helpers.get_device(device_type)
+    function = helpers.create_function_from_module(
+        device,
+        "return_number<int>",
+        r"""
+T return_number<T: IInteger>() {
+    return T(42);
+}
+""",
+    )
+
+    assert function.name == "return_number<int>"
+
+    res = function()
+    assert res == 42
 
 
 @pytest.mark.skip("Awaiting diff-pair follow-up")
@@ -179,9 +199,9 @@ void add_numbers(int a, int b, out int c) {
         in_buffer_0 = NDBuffer(
             element_count=in_buffer_0_size,
             device=device,
-            element_type=int,
+            dtype=int,
         )
-        in_buffer_0.buffer.from_numpy(rand_array_of_ints(in_buffer_0.element_count))
+        in_buffer_0.storage.from_numpy(rand_array_of_ints(in_buffer_0.element_count))
 
     in_buffer_1: Union[int, NDBuffer]
     if in_buffer_1_size == 0:
@@ -190,15 +210,15 @@ void add_numbers(int a, int b, out int c) {
         in_buffer_1 = NDBuffer(
             element_count=in_buffer_1_size,
             device=device,
-            element_type=int,
+            dtype=int,
         )
-        in_buffer_1.buffer.from_numpy(rand_array_of_ints(in_buffer_1.element_count))
+        in_buffer_1.storage.from_numpy(rand_array_of_ints(in_buffer_1.element_count))
 
     # Setup output buffer
     out_buffer = NDBuffer(
         element_count=out_buffer_size,
         device=device,
-        element_type=int,
+        dtype=int,
     )
 
     # Call function
@@ -208,12 +228,12 @@ void add_numbers(int a, int b, out int c) {
     if isinstance(in_buffer_0, int):
         in_data_0 = np.array([in_buffer_0] * out_buffer_size)
     else:
-        in_data_0 = in_buffer_0.buffer.to_numpy().view(np.int32)
+        in_data_0 = in_buffer_0.storage.to_numpy().view(np.int32)
     if isinstance(in_buffer_1, int):
         in_data_1 = np.array([in_buffer_1] * out_buffer_size)
     else:
-        in_data_1 = in_buffer_1.buffer.to_numpy().view(np.int32)
-    out_data = out_buffer.buffer.to_numpy().view(np.int32)
+        in_data_1 = in_buffer_1.storage.to_numpy().view(np.int32)
+    out_data = out_buffer.storage.to_numpy().view(np.int32)
     for i in range(32):
         assert out_data[i] == in_data_0[i] + in_data_1[i]
 
@@ -261,23 +281,23 @@ void add_numbers_remap(int a, int b, out int c) {
     a = NDBuffer(
         element_count=100,
         device=device,
-        element_type=int,
+        dtype=int,
     )
-    a.buffer.from_numpy(rand_array_of_ints(a.element_count))
+    a.storage.from_numpy(rand_array_of_ints(a.element_count))
 
     b = NDBuffer(
         element_count=50,
         device=device,
-        element_type=int,
+        dtype=int,
     )
-    b.buffer.from_numpy(rand_array_of_ints(b.element_count))
+    b.storage.from_numpy(rand_array_of_ints(b.element_count))
 
     c = NDBuffer(
         shape=(50, 100),
         device=device,
-        element_type=int,
+        dtype=int,
     )
-    c.buffer.from_numpy(rand_array_of_ints(c.element_count))
+    c.storage.from_numpy(rand_array_of_ints(c.element_count))
 
     function.map((1,), (0,))(a, b, c)
 
@@ -299,23 +319,23 @@ int add_numbers(int a, int b) {
     a = NDBuffer(
         element_count=50,
         device=device,
-        element_type=int,
+        dtype=int,
     )
-    a.buffer.from_numpy(rand_array_of_ints(a.element_count))
+    a.storage.from_numpy(rand_array_of_ints(a.element_count))
 
     b = NDBuffer(
         element_count=50,
         device=device,
-        element_type=int,
+        dtype=int,
     )
-    b.buffer.from_numpy(rand_array_of_ints(b.element_count))
+    b.storage.from_numpy(rand_array_of_ints(b.element_count))
 
     # just verify it can be called with no exceptions
     res: NDBuffer = function(a, b)
 
-    a_data = a.buffer.to_numpy().view(np.int32)
-    b_data = b.buffer.to_numpy().view(np.int32)
-    res_data = res.buffer.to_numpy().view(np.int32)
+    a_data = a.storage.to_numpy().view(np.int32)
+    b_data = b.storage.to_numpy().view(np.int32)
+    res_data = res.storage.to_numpy().view(np.int32)
 
     assert np.all(res_data == a_data + b_data)
 
@@ -337,61 +357,22 @@ int add_numbers(NDBuffer<int,1> a, NDBuffer<int,1> b) {
     a = NDBuffer(
         element_count=1,
         device=device,
-        element_type=int,
+        dtype=int,
     )
-    a.buffer.from_numpy(rand_array_of_ints(a.element_count))
+    a.storage.from_numpy(rand_array_of_ints(a.element_count))
 
     b = NDBuffer(
         element_count=1,
         device=device,
-        element_type=int,
+        dtype=int,
     )
-    b.buffer.from_numpy(rand_array_of_ints(b.element_count))
+    b.storage.from_numpy(rand_array_of_ints(b.element_count))
 
     # just verify it can be called with no exceptions
     res = function(a, b)
 
-    a_data = a.buffer.to_numpy().view(np.int32)
-    b_data = b.buffer.to_numpy().view(np.int32)
-
-    assert np.all(res == a_data[0] + b_data[0])
-
-
-@pytest.mark.parametrize("device_type", helpers.DEFAULT_DEVICE_TYPES)
-def test_pass_diff_buffer_to_buffer(device_type: DeviceType):
-
-    device = helpers.get_device(device_type)
-    function = helpers.create_function_from_module(
-        device,
-        "add_numbers",
-        r"""
-float add_numbers(NDBuffer<float,1> a, NDBuffer<float,1> b) {
-    return a[{0}]+b[{0}];
-}
-""",
-    )
-
-    a = NDDifferentiableBuffer(
-        element_count=1,
-        device=device,
-        element_type=float,
-        requires_grad=True,
-    )
-    a.buffer.from_numpy(np.random.rand(a.element_count).astype('f'))
-
-    b = NDDifferentiableBuffer(
-        element_count=1,
-        device=device,
-        element_type=float,
-        requires_grad=True,
-    )
-    b.buffer.from_numpy(np.random.rand(b.element_count).astype('f'))
-
-    # just verify it can be called with no exceptions
-    res = function(a, b)
-
-    a_data = a.buffer.to_numpy().view(np.float32)
-    b_data = b.buffer.to_numpy().view(np.float32)
+    a_data = a.storage.to_numpy().view(np.int32)
+    b_data = b.storage.to_numpy().view(np.int32)
 
     assert np.all(res == a_data[0] + b_data[0])
 
