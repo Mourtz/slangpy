@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from slangpy.core.native import AccessType, CallContext, CallMode, Shape, TypeReflection
+from slangpy.core.native import AccessType, CallContext, CallMode, Shape
 
 from slangpy.reflection.reflectiontypes import is_matching_array_type, VectorType
 from slangpy.types.tensor import Tensor, innermost_type
@@ -192,8 +192,8 @@ class TensorMarshall(Marshall):
             return Shape((-1,) * self.dims)
 
     def gen_calldata(self, cgb: CodeGenBlock, context: BindContext, binding: BoundVariable):
-        if isinstance(binding.slang_type, ITensorType):
-            writable = binding.slang_type.writable
+        if isinstance(binding.vector_type, ITensorType):
+            writable = binding.vector_type.writable
         else:
             writable = binding.access[0] in (AccessType.write, AccessType.readwrite)
 
